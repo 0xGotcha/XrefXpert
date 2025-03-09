@@ -5,7 +5,7 @@ import ida_hexrays
 import ida_kernwin
 from PyQt5 import QtWidgets, QtCore, QtGui  # Fixed QColor import
 
-class XrefXpert(ida_kernwin.PluginForm):
+class XrefViewer(ida_kernwin.PluginForm):
     def __init__(self):
         super().__init__()
         self.table = None
@@ -14,7 +14,7 @@ class XrefXpert(ida_kernwin.PluginForm):
         self.current_func = None
 
     def Show(self):
-        return super().Show("XrefXpert", options=ida_kernwin.PluginForm.WOPN_PERSIST)
+        return super().Show("Xref Viewer", options=ida_kernwin.PluginForm.WOPN_PERSIST)
 
     def refresh_xrefs(self):
         """ Refresh the xref list when a function is selected. """
@@ -28,12 +28,12 @@ class XrefXpert(ida_kernwin.PluginForm):
         func = idaapi.get_func(self.current_func)
 
         if not func:
-            ida_kernwin.msg("[XrefXpert] No function found at current address.\n")
+            ida_kernwin.msg("[XrefViewer] No function found at current address.\n")
             return
 
         self.xrefs = list(idautils.CodeRefsTo(func.start_ea, False))
         if not self.xrefs:
-            ida_kernwin.msg("[XrefXpert] No xrefs found for this function.\n")
+            ida_kernwin.msg("[XrefViewer] No xrefs found for this function.\n")
             return
 
         for xref in self.xrefs:
@@ -50,7 +50,7 @@ class XrefXpert(ida_kernwin.PluginForm):
             self.table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"0x{xref:X}"))
             self.table.setItem(row, 3, QtWidgets.QTableWidgetItem(function_signature))
 
-        ida_kernwin.msg(f"[XrefXpert] Loaded {len(self.xrefs)} cross-references.\n")
+        ida_kernwin.msg(f"[XrefViewer] Loaded {len(self.xrefs)} cross-references.\n")
 
     def get_xref_type(self, xref_addr):
         """ Determine the xref type: Call, Jump, or Data """
@@ -74,8 +74,7 @@ class XrefXpert(ida_kernwin.PluginForm):
 
         return idaapi.get_func_name(func_ea) or "Unknown"
 
-    def OnCreate(self, form):
-        """ Create UI elements inside the dockable form """
+    def OnCreate(self, form):#Create UI elements inside the dockable form
         self.parent = self.FormToPyQtWidget(form)
         self.table = QtWidgets.QTableWidget()
         self.table.setColumnCount(4)
@@ -99,8 +98,8 @@ class XrefXpert(ida_kernwin.PluginForm):
 
         self.refresh_xrefs()
 
+
     def highlight_row(self, index):
-        """ Highlight the currently selected function in dark orange """
         for row in range(self.table.rowCount()):
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
@@ -120,10 +119,9 @@ class XrefXpert(ida_kernwin.PluginForm):
             if ida_hexrays.init_hexrays_plugin():
                 ida_hexrays.open_pseudocode(addr, 0)
 
-    def next_xref(self):
-        """ Jump to the next xref in the list and scroll to keep it centered """
+    def next_xref(self):#Jump to the next xref in the list and scroll to keep it centered
         if not self.xrefs:
-            ida_kernwin.msg("[XrefXpert] No cross-references found.\n")
+            ida_kernwin.msg("[XrefViewer] No cross-references found.\n")
             return
 
         self.xref_index = (self.xref_index + 1) % len(self.xrefs)
@@ -135,14 +133,14 @@ class XrefXpert(ida_kernwin.PluginForm):
         # Auto-scroll to keep the selected row in the middle
         self.table.scrollToItem(self.table.item(self.xref_index, 0), QtWidgets.QAbstractItemView.PositionAtCenter)
 
-        ida_kernwin.msg(f"[XrefXpert] Jumped to xref at 0x{xref_addr:X}\n")
+        ida_kernwin.msg(f"[XrefViewer] Jumped to xref at 0x{xref_addr:X}\n")
 
 
-class XrefXpertPlugin(idaapi.plugin_t):
+class XrefViewerPlugin(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
-    comment = "XrefXpert - Cross-Reference Analyzer"
+    comment = "Xref Viewer"
     help = "Displays a list of cross-references for a function"
-    wanted_name = "XrefXpert"
+    wanted_name = "Xref Viewer"
     wanted_hotkey = ""
 
     def __init__(self):
@@ -160,12 +158,13 @@ class XrefXpertPlugin(idaapi.plugin_t):
         self.xref_view.refresh_xrefs()
 
     def next_xref(self):
+        """ Jump to the next xref """
         if self.xref_view:
             self.xref_view.next_xref()
 
     def term(self):
         if self.xref_view:
-            self.xref_view = None
+            self.xref_view = None  # Prevent future access after termination
 
 def PLUGIN_ENTRY():
-    return XrefXpertPlugin()
+    return XrefViewerPlugin()

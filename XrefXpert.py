@@ -154,10 +154,10 @@ class XrefXpertPlugin(idaapi.plugin_t):
         return idaapi.PLUGIN_KEEP
 
     def show_xref_window(self):
-    if not self.xref_view:
-        self.xref_view = XrefViewer()
-    self.xref_view.Show()
-    self.xref_view.refresh_xrefs()
+        if not self.xref_view:
+            self.xref_view = XrefViewer()
+        self.xref_view.Show()
+        self.xref_view.refresh_xrefs()
 
     def next_xref(self):
         if self.xref_view:

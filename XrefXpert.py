@@ -3,6 +3,8 @@ import idautils
 import idc
 import ida_hexrays
 import ida_kernwin
+import ida_bytes
+import ida_ida
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 class XrefViewer(ida_kernwin.PluginForm):
@@ -10,9 +12,13 @@ class XrefViewer(ida_kernwin.PluginForm):
         super().__init__()
         self.table = None
         self.xrefs = []
-        self.current_xrefs = []  # Holds current sorted order
+        self.filtered_xrefs = []
+        self.current_xrefs = []
         self.xref_index = -1
         self.current_func = None
+        self.param_filter = None
+        self.immediate_filter = None
+        self.binary_filter = None
 
     def Show(self):
         return super().Show("Xref Viewer", options=ida_kernwin.PluginForm.WOPN_PERSIST)
@@ -45,11 +51,92 @@ class XrefViewer(ida_kernwin.PluginForm):
 
             self.xrefs.append((direction, xref_type, xref, function_signature, param_count))
 
+        self.apply_filter()
+
+    def apply_filter(self):
+        filtered = self.xrefs
+
+        if self.param_filter is not None:
+            filtered = [entry for entry in filtered if entry[4] == self.param_filter]
+
+        if self.immediate_filter is not None:
+            filtered = [entry for entry in filtered if self.contains_immediate(entry[2], self.immediate_filter)]
+
+        if self.binary_filter is not None:
+            filtered = self.search_pattern(self.binary_filter)  # Now properly filtering
+
+        self.filtered_xrefs = filtered
         self.populate_table()
+
+
+    def contains_immediate(self, func_ea, imm_value):
+        func = idaapi.get_func(func_ea)
+        if not func:
+            return False
+
+        ea = func.start_ea
+        while ea < func.end_ea:
+            insn = idaapi.insn_t()
+            if idaapi.decode_insn(insn, ea):  # Decode instruction
+                for i in range(len(insn.ops)):  # Iterate over operands
+                    op = insn.ops[i]
+
+                    # Check immediate values (o_imm)
+                    if op.type == idaapi.o_imm:
+                        if op.value == imm_value or op.value & 0xFFFFFFFF == imm_value:
+                            return True
+
+                    # Check memory operand (o_mem) in case the offset is encoded as an address
+                    if op.type == idaapi.o_mem:
+                        if op.addr == imm_value or op.addr & 0xFFFFFFFF == imm_value:
+                            return True
+
+                    # Check displacement (o_displ) in case offset is encoded inside an address calculation
+                    if op.type == idaapi.o_displ:
+                        if op.addr == imm_value or op.addr & 0xFFFFFFFF == imm_value:
+                            return True
+
+            ea = idaapi.next_head(ea, func.end_ea)
+
+        return False
+
+
+    def search_pattern(self, pattern):
+        if not self.filtered_xrefs:
+            return []
+
+        compiled_pattern = ida_bytes.compiled_binpat_vec_t()
+        err = ida_bytes.parse_binpat_str(compiled_pattern, idaapi.get_imagebase(), pattern, 16)
+
+        if err:
+            ida_kernwin.msg(f"[XrefViewer] ERROR: Failed to parse pattern '{pattern}': {err}\n")
+            return []
+
+        matching_entries = []
+
+        for entry in self.filtered_xrefs:
+            _, _, func_ea, _, _ = entry
+            func = idaapi.get_func(func_ea)
+            if not func:
+                continue  # Skip if not inside a function
+
+            min_ea = func.start_ea
+            max_ea = func.end_ea
+
+            result = ida_bytes.bin_search3(min_ea, max_ea, compiled_pattern, ida_bytes.BIN_SEARCH_FORWARD)
+
+            while result and result[0] != idaapi.BADADDR and result[0] < max_ea:
+                matching_entries.append(entry)
+                break  # Stop searching for this function after first match
+
+        return matching_entries
+
+
+
 
     def populate_table(self):
         self.table.setRowCount(0)
-        for data in self.xrefs:
+        for data in self.filtered_xrefs:
             direction, xref_type, xref, function_signature, param_count = data
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -60,22 +147,63 @@ class XrefViewer(ida_kernwin.PluginForm):
             self.table.setItem(row, 3, QtWidgets.QTableWidgetItem(function_signature))
             self.table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(param_count)))
 
-        self.current_xrefs = self.xrefs.copy()
-        ida_kernwin.msg(f"[XrefViewer] Loaded {len(self.xrefs)} cross-references.\n")
+        self.current_xrefs = self.filtered_xrefs.copy()
+        ida_kernwin.msg(f"[XrefViewer] Loaded {len(self.filtered_xrefs)} cross-references.\n")
+
+    def show_context_menu(self, pos):
+        """Displays the right-click filter menu."""
+        menu = QtWidgets.QMenu(self.table)
+        filter_menu = menu.addMenu("Filter")
+        
+        set_param_filter_action = filter_menu.addAction("Set Parameter Count")
+        set_imm_filter_action = filter_menu.addAction("Set Immediate Value Filter")
+        set_bin_filter_action = filter_menu.addAction("Set Binary Signature Filter")
+        clear_filter_action = filter_menu.addAction("Clear Filters")
+
+        action = menu.exec_(self.table.viewport().mapToGlobal(pos))
+        if action == set_param_filter_action:
+            self.set_param_filter()
+        elif action == set_imm_filter_action:
+            self.set_immediate_filter()
+        elif action == set_bin_filter_action:
+            self.set_binary_filter()
+        elif action == clear_filter_action:
+            self.param_filter = None
+            self.immediate_filter = None
+            self.binary_filter = None
+            self.apply_filter()
+
+    def set_param_filter(self):
+        """Prompts for parameter count."""
+        text, ok = QtWidgets.QInputDialog.getInt(self.parent, "Set Filter", "Show functions with exactly N parameters:")
+        if ok:
+            self.param_filter = text
+            self.apply_filter()
+
+    def set_immediate_filter(self):
+        """Prompts for an immediate value filter."""
+        text, ok = QtWidgets.QInputDialog.getInt(self.parent, "Set Filter", "Show functions containing this immediate value:")
+        if ok:
+            self.immediate_filter = text
+            self.apply_filter()
+
+    def set_binary_filter(self):
+        """Prompts for a binary signature filter."""
+        text, ok = QtWidgets.QInputDialog.getText(self.parent, "Set Filter", "Enter binary pattern (e.g. '55 8B EC'):")
+        if ok and text.strip():
+            self.binary_filter = text.strip()
+            self.apply_filter()
 
     def get_xref_type(self, xref_addr):
-        flags = idc.get_full_flags(xref_addr)
-        if idc.is_code(flags):
-            mnem = idc.print_insn_mnem(xref_addr)
-            return "Call" if mnem == "call" else "Jump" if mnem == "jmp" else "Code"
-        elif idc.is_data(flags):
-            return "Data"
-        return "Unknown"
+            flags = idc.get_full_flags(xref_addr)
+            if idc.is_code(flags):
+                mnem = idc.print_insn_mnem(xref_addr)
+                return "Call" if mnem == "call" else "Jump" if mnem == "jmp" else "Code"
+            elif idc.is_data(flags):
+                return "Data"
+            return "Unknown"
 
     def get_function_signature(self, func_ea):
-        func_tinfo = idaapi.tinfo_t()
-        if idaapi.get_tinfo(func_tinfo, func_ea):
-            return func_tinfo._print()
         return idaapi.get_func_name(func_ea) or "Unknown"
 
     def get_param_count(self, func_ea):
@@ -96,6 +224,10 @@ class XrefViewer(ida_kernwin.PluginForm):
         self.table.setSortingEnabled(True)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().sectionClicked.connect(self.remember_sorting)
+
+        # Context menu policy (right-click menu)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
@@ -118,6 +250,25 @@ class XrefViewer(ida_kernwin.PluginForm):
             for row in range(self.table.rowCount())
         ]
 
+    def show_context_menu(self, pos):
+        """Creates the right-click menu."""
+        menu = QtWidgets.QMenu(self.table)
+        filter_menu = menu.addMenu("Filter")
+        
+        filter_menu.addAction("Set Parameter Count", self.set_param_filter)
+        filter_menu.addAction("Set Immediate Value Filter", self.set_immediate_filter)
+        filter_menu.addAction("Set Binary Signature Filter", self.set_binary_filter)
+        filter_menu.addAction("Clear Filters", self.clear_filters)
+
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def clear_filters(self):
+        """Clears all filters and refreshes the table."""
+        self.param_filter = None
+        self.immediate_filter = None
+        self.binary_filter = None
+        self.apply_filter()
+
     def highlight_row(self, index):
         """Highlights the selected row and resets others."""
         for row in range(self.table.rowCount()):
@@ -125,22 +276,21 @@ class XrefViewer(ida_kernwin.PluginForm):
                 item = self.table.item(row, col)
                 if item:
                     if row == index:
-                        item.setForeground(QtGui.QColor("darkorange"))  # Highlight active row text
-                        item.setBackground(QtGui.QBrush(QtGui.QColor(50, 50, 50)))  # Darker background
+                        item.setForeground(QtGui.QColor("darkorange"))
+                        item.setBackground(QtGui.QBrush(QtGui.QColor(50, 50, 50)))
                     else:
-                        item.setForeground(QtGui.QBrush())  # Reset text color
-                        item.setBackground(QtGui.QBrush())  # Reset background
+                        item.setForeground(QtGui.QBrush())
+                        item.setBackground(QtGui.QBrush())
 
     def on_item_clicked(self, row, _):
-        """Handles row clicks to jump to the address and highlight."""
         addr = int(self.table.item(row, 2).text(), 16)
         idaapi.jumpto(addr)
         self.highlight_row(row)
         ida_hexrays.open_pseudocode(addr, 0)
-        self.xref_index = row  # Update xref index to allow proper 'next' navigation
+        self.xref_index = row
 
     def next_xref(self):
-        """Moves to the next xref in the sorted list."""
+        """Moves to the next xref in the filtered and sorted list."""
         if not self.current_xrefs:
             ida_kernwin.msg("[XrefViewer] No cross-references found.\n")
             return
@@ -178,8 +328,7 @@ class XrefViewerPlugin(idaapi.plugin_t):
             self.xref_view.next_xref()
 
     def term(self):
-        if self.xref_view:
-            self.xref_view = None  # Prevent future access after termination
+        self.xref_view = None
 
 def PLUGIN_ENTRY():
     return XrefViewerPlugin()

@@ -16,6 +16,12 @@ XrefXpert is a powerful IDA Pro plugin that enhances cross-reference (xref) navi
 
 <img width="985" alt="image" src="https://github.com/user-attachments/assets/f3d00ca7-3f23-4f93-842e-1a5a8870fa1f" />
 
+
+
+Filter Down!
+
+<img width="547" alt="image" src="https://github.com/user-attachments/assets/624a80f0-5559-47ee-9495-32a5b33a2141" />
+
 ---
 
 ## **Installation** 📦  
